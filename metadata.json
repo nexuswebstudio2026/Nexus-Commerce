@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Commerce Suite",
+  "description": "Ecosistema macro de tiendas virtuales multi-tenant administrado por Nexus Web Studio, con aislamiento PostgreSQL RLS y sincronización directa con Google Sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
