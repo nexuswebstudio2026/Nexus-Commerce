@@ -411,6 +411,23 @@ export const fetchBusinessesFromGoogleSheets = async (
   accessToken?: string | null
 ): Promise<Business[] | null> => {
   const token = accessToken || getGoogleAccessToken();
+  const appsScriptUrl = localStorage.getItem('nexus_appscript_webhook_url');
+
+  // 0. Try Google Apps Script Webhook API first if configured
+  if (appsScriptUrl) {
+    try {
+      const data = await fetchDataFromAppsScriptWebhook(appsScriptUrl);
+      if (data && data.success && data.data) {
+        const sheetRows = data.data['Negocios'] || data.data['negocios'];
+        if (Array.isArray(sheetRows) && sheetRows.length > 1) {
+          const parsed = parseBusinessesFromSheetRows(sheetRows);
+          if (parsed.length > 0) return parsed;
+        }
+      }
+    } catch (err) {
+      console.warn('Apps Script Webhook fetch error:', err);
+    }
+  }
 
   // 1. Try Google Sheets V4 API directly if token is available
   if (token) {
@@ -491,3 +508,90 @@ export const fetchBusinessesFromGoogleSheets = async (
   return null;
 };
 
+// --- GOOGLE APPS SCRIPT WEBHOOK REST API HELPERS (FOR VERCEL / PRODUCTION) ---
+
+export const fetchDataFromAppsScriptWebhook = async (webhookUrl: string) => {
+  try {
+    const res = await fetch(webhookUrl);
+    if (!res.ok) throw new Error(`HTTP Error ${res.status}: ${res.statusText}`);
+    const json = await res.json();
+    return json;
+  } catch (err: any) {
+    console.error('Error al conectar con Google Apps Script Webhook:', err);
+    throw new Error(`Error en Google Apps Script: ${err.message}`);
+  }
+};
+
+export const sendDataToAppsScriptWebhook = async (
+  webhookUrl: string,
+  payload: { action: 'overwriteTab' | 'appendRow'; tabName: string; allRows?: string[][]; row?: string[] }
+) => {
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids CORS preflight in Apps Script
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+    const json = await res.json();
+    return json;
+  } catch (err: any) {
+    console.error('Error al enviar datos a Google Apps Script Webhook:', err);
+    throw new Error(`Error de envío a Google Apps Script: ${err.message}`);
+  }
+};
+
+export interface SheetsWebhookLog {
+  id: string;
+  receivedAt: string;
+  action: string;
+  sheetTitle: string;
+  spreadsheetId?: string;
+  range?: string;
+  value?: any;
+  oldValue?: any;
+  userEmail?: string;
+  rowCount?: number;
+  payload: any;
+  status: 'received' | 'processed';
+}
+
+export const fetchNexusWebhookLogs = async (): Promise<SheetsWebhookLog[]> => {
+  try {
+    const res = await fetch('/api/webhooks/google-sheets/events');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.events || [];
+  } catch (err) {
+    console.warn('Error fetching Nexus webhook logs:', err);
+    return [];
+  }
+};
+
+export const clearNexusWebhookLogs = async (): Promise<boolean> => {
+  try {
+    const res = await fetch('/api/webhooks/google-sheets/events', { method: 'DELETE' });
+    return res.ok;
+  } catch (err) {
+    return false;
+  }
+};
+
+export const triggerTestNexusWebhook = async (sampleData?: {
+  action?: string;
+  sheetTitle?: string;
+  range?: string;
+  value?: string;
+  oldValue?: string;
+}) => {
+  try {
+    const res = await fetch('/api/webhooks/google-sheets/test-trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sampleData || {}),
+    });
+    return await res.json();
+  } catch (err: any) {
+    throw new Error(`Error en simulación de Webhook: ${err.message}`);
+  }
+};

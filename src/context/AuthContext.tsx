@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
-import { INITIAL_USERS } from '../mockData';
+import { INITIAL_USERS } from '../initialData';
 import { ensureUserIsSuperadmin, enforceSuperadminRole } from '../userUtils';
 
 interface AuthContextType {
@@ -38,7 +38,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loginWithEmail = async (email: string, _pass: string): Promise<User> => {
     setLoading(true);
     // Find or simulate user login
-    const found = INITIAL_USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
+    const found = INITIAL_USERS.find((u: User) => u.email.toLowerCase() === email.toLowerCase());
     const loggedUser = found ? ensureUserIsSuperadmin(found) : ensureUserIsSuperadmin({
       id: `usr-${Date.now()}`,
       name: email.split('@')[0],

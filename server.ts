@@ -418,7 +418,134 @@ async function startServer() {
       return res.status(500).json({ error: error.message || 'Error en el servicio de sincronización desde Google Sheets.' });
     }
   });
+  // ==========================================
+  // GOOGLE SHEETS WEBHOOK LISTENER INFRASTRUCTURE
+  // ==========================================
 
+  interface SheetsWebhookEvent {
+    id: string;
+    receivedAt: string;
+    action: string;
+    sheetTitle: string;
+    spreadsheetId?: string;
+    range?: string;
+    value?: any;
+    oldValue?: any;
+    userEmail?: string;
+    rowCount?: number;
+    payload: any;
+    status: 'received' | 'processed';
+  }
+
+  const sheetsWebhookLogs: SheetsWebhookEvent[] = [];
+  const NEXUS_WEBHOOK_SECRET = process.env.NEXUS_SHEETS_WEBHOOK_SECRET || 'nexus_suite_secret_2026';
+
+  // GET /api/webhooks/google-sheets - Health check
+  app.get('/api/webhooks/google-sheets', (_req, res) => {
+    res.json({
+      success: true,
+      service: 'Nexus Commerce Suite - Google Sheets Webhook Infrastructure',
+      active: true,
+      endpoint: '/api/webhooks/google-sheets',
+      totalEvents: sheetsWebhookLogs.length,
+      lastEventAt: sheetsWebhookLogs[0]?.receivedAt || null,
+      instructions: 'Envía peticiones HTTP POST desde tu Google Apps Script trigger para sincronizar eventos en tiempo real sin requerir Google Workspace OAuth.',
+    });
+  });
+
+  // POST /api/webhooks/google-sheets - Primary incoming webhook listener
+  app.post('/api/webhooks/google-sheets', (req, res) => {
+    try {
+      const incomingSecret = req.headers['x-nexus-secret'] || req.query.secret || req.body?.secret;
+      
+      // Extract data fields
+      const payload = req.body || {};
+      const action = payload.action || payload.eventType || 'onEdit';
+      const sheetTitle = payload.sheetTitle || payload.tabName || payload.sheetName || 'Hoja1';
+      const spreadsheetId = payload.spreadsheetId || payload.sheetId || '';
+      const range = payload.range || payload.cell || '';
+      const value = payload.value !== undefined ? payload.value : payload.newValue;
+      const oldValue = payload.oldValue;
+      const userEmail = payload.userEmail || payload.user || 'google_sheets_trigger';
+      const rowCount = Array.isArray(payload.allRows) ? payload.allRows.length : (payload.rows ? payload.rows.length : undefined);
+
+      const newEvent: SheetsWebhookEvent = {
+        id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        receivedAt: new Date().toISOString(),
+        action: String(action),
+        sheetTitle: String(sheetTitle),
+        spreadsheetId: spreadsheetId ? String(spreadsheetId) : undefined,
+        range: range ? String(range) : undefined,
+        value,
+        oldValue,
+        userEmail: String(userEmail),
+        rowCount,
+        payload,
+        status: 'received',
+      };
+
+      // Add to front of logs array (keep last 100)
+      sheetsWebhookLogs.unshift(newEvent);
+      if (sheetsWebhookLogs.length > 100) {
+        sheetsWebhookLogs.pop();
+      }
+
+      console.log(`[Nexus Webhook] Evento recibido: ${action} en hoja "${sheetTitle}" (${newEvent.id})`);
+
+      return res.json({
+        success: true,
+        message: 'Evento de Webhook procesado e integrado correctamente en Nexus Commerce Suite.',
+        eventId: newEvent.id,
+        receivedAt: newEvent.receivedAt,
+        action: newEvent.action,
+        sheetTitle: newEvent.sheetTitle,
+      });
+    } catch (error: any) {
+      console.error('Error procesando Webhook de Google Sheets:', error);
+      return res.status(500).json({ error: error.message || 'Error al procesar el webhook entrante.' });
+    }
+  });
+
+  // GET /api/webhooks/google-sheets/events - Fetch incoming webhook event history
+  app.get('/api/webhooks/google-sheets/events', (_req, res) => {
+    res.json({
+      success: true,
+      events: sheetsWebhookLogs,
+      totalCount: sheetsWebhookLogs.length,
+    });
+  });
+
+  // DELETE /api/webhooks/google-sheets/events - Clear webhook event history
+  app.delete('/api/webhooks/google-sheets/events', (_req, res) => {
+    sheetsWebhookLogs.length = 0;
+    res.json({ success: true, message: 'Historial de eventos de Webhook limpiado con éxito.' });
+  });
+
+  // POST /api/webhooks/google-sheets/test-trigger - Simulate incoming webhook trigger
+  app.post('/api/webhooks/google-sheets/test-trigger', (req, res) => {
+    const { action, sheetTitle, range, value, oldValue } = req.body;
+    const testEvent: SheetsWebhookEvent = {
+      id: `evt_sim_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      receivedAt: new Date().toISOString(),
+      action: action || 'SimulatedEdit',
+      sheetTitle: sheetTitle || 'Productos',
+      range: range || 'B4',
+      value: value || 'Stock actualizado: 120 unidades',
+      oldValue: oldValue || 'Stock anterior: 85 unidades',
+      userEmail: 'simulador_nexus@nexuscommerce.com',
+      payload: { simulated: true, ...req.body },
+      status: 'received',
+    };
+
+    sheetsWebhookLogs.unshift(testEvent);
+    if (sheetsWebhookLogs.length > 100) sheetsWebhookLogs.pop();
+
+    res.json({
+      success: true,
+      message: 'Webhook de prueba simulado e insertado en la cola de eventos de Nexus Commerce Suite.',
+      event: testEvent,
+    });
+  });
   // Mount Vite dev server middleware
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

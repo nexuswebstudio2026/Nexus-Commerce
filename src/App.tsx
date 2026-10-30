@@ -7,7 +7,7 @@ import {
   INITIAL_ORDERS, 
   INITIAL_AUDIT_LOGS,
   INITIAL_NOTIFICATIONS
-} from './mockData';
+} from './initialData';
 import { Business, ProductService, User, SupplierRestockRecord, Order, AuditLog, EmployeePermission, AppNotification } from './types';
 import { Navbar, MainNavPage } from './components/Navbar';
 import { ArchitectureDocModal } from './components/ArchitectureDocModal';

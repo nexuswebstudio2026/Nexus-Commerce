@@ -58,6 +58,11 @@ import {
   appendRowToGoogleSheet,
   overwriteGoogleSheetTab,
   createNexusPrimeMasterSheet,
+  fetchDataFromAppsScriptWebhook,
+  fetchNexusWebhookLogs,
+  clearNexusWebhookLogs,
+  triggerTestNexusWebhook,
+  SheetsWebhookLog,
   GoogleDriveSpreadsheet,
   GoogleSpreadsheetMetadata
 } from '../../googleSheetsAuth';
@@ -142,8 +147,68 @@ export const SuperadminDashboard: React.FC<SuperadminDashboardProps> = ({
   };
 
   const [spreadsheetMeta, setSpreadsheetMeta] = useState<GoogleSpreadsheetMetadata | null>(null);
+  const [appsScriptUrl, setAppsScriptUrl] = useState<string>(() => localStorage.getItem('nexus_appscript_webhook_url') || '');
+  const [showAppsScriptGuide, setShowAppsScriptGuide] = useState<boolean>(false);
+
+  const handleSaveAppsScriptUrl = (url: string) => {
+    setAppsScriptUrl(url);
+    localStorage.setItem('nexus_appscript_webhook_url', url);
+    setSheetsStatusMsg(`URL Webhook de Google Apps Script guardada correctamente.`);
+  };
   const [isSheetsLoading, setIsSheetsLoading] = useState<boolean>(false);
   const [sheetsStatusMsg, setSheetsStatusMsg] = useState<string>('');
+
+  // Nexus Sheets Webhook Infrastructure State
+  const [webhookLogs, setWebhookLogs] = useState<SheetsWebhookLog[]>([]);
+  const [showWebhookTriggerGuide, setShowWebhookTriggerGuide] = useState<boolean>(false);
+  const [showWebhookSimulator, setShowWebhookSimulator] = useState<boolean>(false);
+  const [webhookSimForm, setWebhookSimForm] = useState({
+    sheetTitle: 'Productos',
+    range: 'B4',
+    value: 'Stock actualizado: 120 unidades',
+    oldValue: 'Stock anterior: 85 unidades',
+    action: 'onEdit'
+  });
+
+  const loadWebhookLogs = async () => {
+    const logs = await fetchNexusWebhookLogs();
+    setWebhookLogs(logs);
+  };
+
+  const handleClearWebhookLogs = async () => {
+    await clearNexusWebhookLogs();
+    setWebhookLogs([]);
+    setSheetsStatusMsg('Historial de eventos del Webhook Escuchador limpiado.');
+  };
+
+  const handleSimulateWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsSheetsLoading(true);
+      const result = await triggerTestNexusWebhook(webhookSimForm);
+      if (result.success) {
+        setSheetsStatusMsg('¡Evento Webhook de prueba recibido y registrado en Nexus Commerce Suite!');
+        await loadWebhookLogs();
+      } else {
+        setSheetsStatusMsg(`Error en simulación: ${result.error}`);
+      }
+    } catch (err: any) {
+      setSheetsStatusMsg(`Error en simulación Webhook: ${err.message}`);
+    } finally {
+      setIsSheetsLoading(false);
+    }
+  };
+
+  // Poll Webhook Logs when Database Inspector is open
+  useEffect(() => {
+    if (activeSubTab === 'database_inspector') {
+      loadWebhookLogs();
+      const interval = setInterval(() => {
+        loadWebhookLogs();
+      }, 4000);
+      return () => clearInterval(interval);
+    }
+  }, [activeSubTab]);
 
   // SMTP Configuration State
   const [smtpForm, setSmtpForm] = useState({
@@ -1409,6 +1474,339 @@ export const SuperadminDashboard: React.FC<SuperadminDashboardProps> = ({
                 <span>{sheetsStatusMsg}</span>
               </div>
             )}
+          </div>
+
+          {/* GOOGLE APPS SCRIPT WEBHOOK CONNECTOR CARD FOR VERCEL */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Google Apps Script Webhook API (Opción Vercel Sin Workspace)</span>
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded-full text-[10px] font-mono font-bold">VERCEL READY</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Conecta directamente tu Google Sheet sin necesidad de logins de usuario. Ideal para despliegues en Vercel.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowAppsScriptGuide(!showAppsScriptGuide)}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-bold rounded-xl border border-slate-700 transition-colors cursor-pointer"
+              >
+                {showAppsScriptGuide ? 'Ocultar Guía Script' : '📜 Ver / Copiar Código Apps Script'}
+              </button>
+            </div>
+
+            {/* Webhook Input Field */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-300 block">
+                URL del Webhook de Google Apps Script (`https://script.google.com/macros/s/.../exec`):
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="url"
+                  value={appsScriptUrl}
+                  onChange={(e) => handleSaveAppsScriptUrl(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/AKfycbx.../exec"
+                  className="flex-1 px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-emerald-300 outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <button
+                  onClick={() => {
+                    if (!appsScriptUrl) {
+                      alert('Por favor pega primero la URL del Webhook de Apps Script');
+                      return;
+                    }
+                    setIsSheetsLoading(true);
+                    fetchDataFromAppsScriptWebhook(appsScriptUrl)
+                      .then(data => {
+                        setIsSheetsLoading(false);
+                        if (data.success) {
+                          setSheetsStatusMsg('¡Conexión Webhook con Google Apps Script verificada con éxito!');
+                        } else {
+                          setSheetsStatusMsg(`Respuesta Webhook: ${data.error || 'Error desconocido'}`);
+                        }
+                      })
+                      .catch(err => {
+                        setIsSheetsLoading(false);
+                        setSheetsStatusMsg(`Error al probar Webhook: ${err.message}`);
+                      });
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-colors shrink-0 cursor-pointer"
+                >
+                  Probar Conexión Webhook
+                </button>
+              </div>
+            </div>
+
+            {/* Apps Script Guide Code Box */}
+            {showAppsScriptGuide && (
+              <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3 animate-in fade-in slide-in-from-top-2">
+                <div className="flex items-center justify-between text-xs text-amber-400 font-bold">
+                  <span>Código para pegar en Extensiones &gt; Apps Script en tu Google Sheet:</span>
+                  <button
+                    onClick={() => {
+                      const code = `function doGet(e) { try { const ss = SpreadsheetApp.getActiveSpreadsheet(); const result = {}; const tabs = ['Usuarios', 'Negocios', 'Productos', 'Pedidos', 'Auditoria', 'Empleados', 'Comisiones']; tabs.forEach(t => { let sheet = ss.getSheetByName(t) || ss.insertSheet(t); result[t] = sheet.getDataRange().getValues(); }); return ContentService.createTextOutput(JSON.stringify({ success: true, data: result })).setMimeType(ContentService.MimeType.JSON); } catch (err) { return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON); } } function doPost(e) { try { const ss = SpreadsheetApp.getActiveSpreadsheet(); const contents = JSON.parse(e.postData.contents); const { action, tabName, allRows, row } = contents; if (action === "overwriteTab" && tabName && allRows) { let sheet = ss.getSheetByName(tabName) || ss.insertSheet(tabName); sheet.clearContents(); if (allRows.length > 0) sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows); return ContentService.createTextOutput(JSON.stringify({ success: true, message: "OK" })).setMimeType(ContentService.MimeType.JSON); } } catch (err) { return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message })).setMimeType(ContentService.MimeType.JSON); } }`;
+                      navigator.clipboard.writeText(code);
+                      alert('¡Código de Apps Script copiado al portapapeles!');
+                    }}
+                    className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg transition-colors cursor-pointer"
+                  >
+                    📋 Copiar Código Script
+                  </button>
+                </div>
+
+                <pre className="text-[11px] font-mono text-slate-300 bg-slate-900/80 p-3 rounded-lg overflow-x-auto max-h-48 border border-slate-800 leading-relaxed">
+{`function doGet(e) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const result = {};
+    const tabs = ['Usuarios', 'Negocios', 'Productos', 'Pedidos', 'Auditoria', 'Empleados', 'Comisiones'];
+    tabs.forEach(t => {
+      let sheet = ss.getSheetByName(t) || ss.insertSheet(t);
+      result[t] = sheet.getDataRange().getValues();
+    });
+    return ContentService.createTextOutput(JSON.stringify({ success: true, data: result }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}`}
+                </pre>
+                <div className="text-[11px] text-slate-400 space-y-1">
+                  <div>1. En tu Google Sheet ve a <strong>Extensiones &gt; Apps Script</strong> y pega este código.</div>
+                  <div>2. Haz clic en <strong>Implementar &gt; Nueva implementación</strong>.</div>
+                  <div>3. Elige <strong>Aplicación Web</strong>, Ejecutar como: <strong>Yo</strong>, Quién tiene acceso: <strong>Cualquier persona</strong>.</div>
+                  <div>4. Copia la URL obtenida y pégala en el campo de arriba para probarla.</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SERVIDOR ESCUCHADOR DE WEBHOOKS EN INFRAESTRUCTURA NEXUS (DESDE GOOGLE SHEETS) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-xl border border-blue-500/30">
+                  <Activity className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Servidor Webhook Escuchador de Google Sheets</span>
+                    <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded-full text-[10px] font-mono font-bold">NEXUS GATEWAY ACTIVE</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Endpoint `/api/webhooks/google-sheets` escucha eventos `onEdit` / `onChange` en tiempo real desde Google Sheets.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setShowWebhookTriggerGuide(!showWebhookTriggerGuide)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-blue-300 text-xs font-bold rounded-xl border border-slate-700 transition-colors cursor-pointer"
+                >
+                  {showWebhookTriggerGuide ? 'Ocultar Script Trigger' : '⚡ Ver Script Trigger onEdit'}
+                </button>
+                <button
+                  onClick={() => setShowWebhookSimulator(!showWebhookSimulator)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-bold rounded-xl border border-slate-700 transition-colors cursor-pointer"
+                >
+                  {showWebhookSimulator ? 'Ocultar Simulador' : '🧪 Simular Evento Entrante'}
+                </button>
+              </div>
+            </div>
+
+            {/* Listener URL Endpoint */}
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between gap-3 text-xs">
+              <div className="font-mono text-slate-300 truncate">
+                <span className="text-slate-500 mr-2">Endpoint Receptor:</span>
+                <span className="text-emerald-400 font-bold">{window.location.origin}/api/webhooks/google-sheets</span>
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/google-sheets`);
+                  setSheetsStatusMsg('¡Endpoint Webhook copiado al portapapeles!');
+                }}
+                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px] rounded-lg shrink-0 cursor-pointer"
+              >
+                📋 Copiar URL
+              </button>
+            </div>
+
+            {/* Trigger Code Guide */}
+            {showWebhookTriggerGuide && (
+              <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3 animate-in fade-in slide-in-from-top-2">
+                <div className="flex items-center justify-between text-xs text-blue-400 font-bold">
+                  <span>Script Trigger de Google Apps Script para notificar cambios a Nexus en tiempo real:</span>
+                  <button
+                    onClick={() => {
+                      const triggerCode = `function installNexusWebhookTrigger() {\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  ScriptApp.newTrigger('onSheetEditWebhook')\n    .forSpreadsheet(ss)\n    .onEdit()\n    .create();\n  Logger.log('Trigger instalado');\n}\n\nfunction onSheetEditWebhook(e) {\n  if (!e) return;\n  const NEXUS_URL = "${window.location.origin}/api/webhooks/google-sheets";\n  try {\n    const payload = {\n      action: "onEdit",\n      sheetTitle: e.range.getSheet().getName(),\n      range: e.range.getA1Notation(),\n      value: e.value || e.range.getValue(),\n      oldValue: e.oldValue || "",\n      userEmail: Session.getActiveUser().getEmail() || "google_sheets_user",\n      spreadsheetId: e.source.getId()\n    };\n    UrlFetchApp.fetch(NEXUS_URL, {\n      method: "post",\n      contentType: "application/json",\n      payload: JSON.stringify(payload),\n      muteHttpExceptions: true\n    });\n  } catch (err) {}\n}`;
+                      navigator.clipboard.writeText(triggerCode);
+                      alert('¡Código Trigger de Google Sheets copiado al portapapeles!');
+                    }}
+                    className="px-2.5 py-1 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-lg transition-colors cursor-pointer"
+                  >
+                    📋 Copiar Trigger Code
+                  </button>
+                </div>
+                <pre className="text-[11px] font-mono text-slate-300 bg-slate-900/80 p-3 rounded-lg overflow-x-auto max-h-48 border border-slate-800 leading-relaxed">
+{`function onSheetEditWebhook(e) {
+  if (!e) return;
+  const NEXUS_URL = "${window.location.origin}/api/webhooks/google-sheets";
+  try {
+    const payload = {
+      action: "onEdit",
+      sheetTitle: e.range.getSheet().getName(),
+      range: e.range.getA1Notation(),
+      value: e.value || e.range.getValue(),
+      oldValue: e.oldValue || "",
+      userEmail: Session.getActiveUser().getEmail() || "google_sheets_user",
+      spreadsheetId: e.source.getId()
+    };
+    UrlFetchApp.fetch(NEXUS_URL, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+  } catch (err) {
+    Logger.log("Error Webhook: " + err.message);
+  }
+}`}
+                </pre>
+              </div>
+            )}
+
+            {/* Webhook Simulator */}
+            {showWebhookSimulator && (
+              <form onSubmit={handleSimulateWebhook} className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3 text-xs">
+                <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span>Simular Evento Entrante de Google Sheets</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Pestaña / Hoja:</label>
+                    <input
+                      type="text"
+                      value={webhookSimForm.sheetTitle}
+                      onChange={(e) => setWebhookSimForm({ ...webhookSimForm, sheetTitle: e.target.value })}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">Rango A1:</label>
+                    <input
+                      type="text"
+                      value={webhookSimForm.range}
+                      onChange={(e) => setWebhookSimForm({ ...webhookSimForm, range: e.target.value })}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">Nuevo Valor:</label>
+                    <input
+                      type="text"
+                      value={webhookSimForm.value}
+                      onChange={(e) => setWebhookSimForm({ ...webhookSimForm, value: e.target.value })}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">Valor Anterior:</label>
+                    <input
+                      type="text"
+                      value={webhookSimForm.oldValue}
+                      onChange={(e) => setWebhookSimForm({ ...webhookSimForm, oldValue: e.target.value })}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-white font-mono"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isSheetsLoading}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg transition-colors cursor-pointer"
+                  >
+                    🚀 Disparar Webhook de Prueba
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Live Webhook Logs Inspector Table */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                  <span>Registro en Tiempo Real de Webhooks Recibidos ({webhookLogs.length})</span>
+                </span>
+                {webhookLogs.length > 0 && (
+                  <button
+                    onClick={handleClearWebhookLogs}
+                    className="text-slate-500 hover:text-red-400 transition-colors flex items-center gap-1 cursor-pointer text-[11px]"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Limpiar Registro</span>
+                  </button>
+                )}
+              </div>
+
+              {webhookLogs.length === 0 ? (
+                <div className="p-4 bg-slate-950/60 border border-slate-800/80 rounded-xl text-center text-slate-500 text-xs font-mono">
+                  No hay eventos de Webhook recientes en la cola. Ejecuta una edición en Google Sheets o usa el simulador para probar.
+                </div>
+              ) : (
+                <div className="max-h-56 overflow-y-auto border border-slate-800 rounded-xl bg-slate-950">
+                  <table className="w-full text-left text-[11px] font-mono">
+                    <thead className="bg-slate-900 text-slate-400 sticky top-0 border-b border-slate-800">
+                      <tr>
+                        <th className="p-2.5">ID / Hora</th>
+                        <th className="p-2.5">Acción</th>
+                        <th className="p-2.5">Hoja / Rango</th>
+                        <th className="p-2.5">Valor Editado</th>
+                        <th className="p-2.5">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                      {webhookLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-900/60 transition-colors">
+                          <td className="p-2.5 text-slate-400">
+                            <div className="font-bold text-emerald-400">{log.id}</div>
+                            <div className="text-[10px] text-slate-500">{new Date(log.receivedAt).toLocaleTimeString()}</div>
+                          </td>
+                          <td className="p-2.5">
+                            <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded text-[10px] font-bold">
+                              {log.action}
+                            </span>
+                          </td>
+                          <td className="p-2.5">
+                            <span className="text-amber-300 font-bold">{log.sheetTitle}</span>
+                            {log.range && <span className="text-slate-400 ml-1">({log.range})</span>}
+                          </td>
+                          <td className="p-2.5 truncate max-w-xs">
+                            <span className="text-emerald-300">{String(log.value ?? log.rowCount ? `${log.rowCount} filas` : 'N/A')}</span>
+                            {log.oldValue && <span className="text-slate-500 line-through ml-2">{String(log.oldValue)}</span>}
+                          </td>
+                          <td className="p-2.5">
+                            <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1 w-max">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              <span>Recibido</span>
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* CONFIGURACIÓN Y PRUEBA DE SERVIDOR SMTP (CORREOS DE VERIFICACIÓN) */}
